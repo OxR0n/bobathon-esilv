@@ -1,0 +1,334 @@
+from . import _dataframe as sbd
+from ._dispatch import dispatch, raise_dispatch_unregistered_type
+from ._single_column_transformer import RejectColumn, SingleColumnTransformer
+
+__all__ = ["ToFloat"]
+
+
+@dispatch
+def _str_replace(col, decimal, thousand, parentheses):
+    raise_dispatch_unregistered_type(col, kind="Series")
+
+
+@_str_replace.specialize("pandas", argument_type="Column")
+def _str_replace_pandas(col, decimal, thousand, parentheses):
+    # Replace parentheses around numbers with a leading minus sign
+    # e.g., "(123.45)" → "-123.45"
+    if parentheses:
+        col = col.str.replace(r"^\((.*)\)$", r"-\1", regex=True)
+    # Remove thousand separators
+    if thousand:
+        col = col.str.replace(thousand, "", regex=False)
+    # Replace decimal separator with '.'
+    return col.str.replace(decimal, ".", regex=False)
+
+
+@_str_replace.specialize("polars", argument_type="Column")
+def _str_replace_polars(col, decimal, thousand, parentheses):
+    # Replace parentheses around numbers with a leading minus sign
+    # e.g., "(123.45)" → "-123.45"
+    if parentheses:
+        col = col.str.replace_all(r"^\((.*)\)$", r"-$1")
+    # Remove thousand separators
+    col = col.str.replace_all(thousand, "", literal=True)
+    # Replace decimal separator with '.'
+    return col.str.replace_all(decimal, ".", literal=True)
+
+
+class ToFloat(SingleColumnTransformer):
+    """
+    Convert a column to 32-bit floating-point numbers.
+
+    No conversion is attempted if the column has a datetime or categorical
+    dtype; a ``RejectColumn`` exception is raised.
+
+    Otherwise, we attempt to convert the column to float32. If the conversion
+    fails the column is rejected (a ``RejectColumn`` exception is raised).
+
+    For pandas, the output is always ``np.float32``, not the extension dtype
+    ``pd.Float64Dtype``. We do this conversion because most scikit-learn
+    estimators cannot handle those dtypes correctly yet, especially in the
+    presence of missing values (represented by ``pd.NA`` in such columns).
+
+    During ``transform``, entries for which conversion fails are replaced by
+    null values.
+
+    Parameters
+    ----------
+    decimal : str, default='.'
+        Character to recognize as the decimal separator when converting from
+        strings to floats. Other possible decimal separators are removed from
+        the strings before conversion.
+    thousand : str or None, default=None
+        Character used as thousands separator. Supported values are ``"."``,
+        ``,``, space (``" "``), apostrophe (``"'"``), or ``None`` (no thousands
+        separator). The decimal and thousands separators must differ.
+    parentheses : bool, default=False
+        Whether to recognize negative numbers represented using parentheses, e.g.,
+        "(123.45)" → "-123.45". If True, parentheses around numbers are replaced
+        with a leading minus sign before conversion.
+
+    Notes
+    -----
+    This transformer does not validate number formatting. It simply removes
+    thousands separators and replaces the decimal separator. As a result,
+    some malformed inputs may still be converted but yield unexpected values.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> from skrub import ToFloat
+
+    A column that does not contain floats is converted if possible:
+
+    >>> s = pd.Series(['1.1', None, '3.3'], name='x')
+    >>> s
+    0     1.1
+    1    ...
+    2     3.3
+    Name: x, dtype: ...
+    >>> s[0]
+    '1.1'
+    >>> to_float = ToFloat()
+    >>> float_s = to_float.fit_transform(s)
+    >>> float_s
+    0    1.1
+    1    NaN
+    2    3.3
+    Name: x, dtype: float32
+    >>> float_s[0]            # doctest: +SKIP
+    np.float32(1.1)
+
+    A numeric column will also be converted to floats:
+
+    >>> s = pd.Series([1, 2, 3])
+    >>> s
+    0    1
+    1    2
+    2    3
+    dtype: int64
+    >>> to_float.fit_transform(s)
+    0    1.0
+    1    2.0
+    2    3.0
+    dtype: float32
+
+    Boolean columns are treated as numbers:
+
+    >>> s = pd.Series([True, False], name='b')
+    >>> s
+    0     True
+    1    False
+    Name: b, dtype: bool
+    >>> to_float.fit_transform(s)
+    0    1.0
+    1    0.0
+    Name: b, dtype: float32
+
+    >>> s = pd.Series([True, None], name='b', dtype='boolean')
+    >>> s
+    0    True
+    1    <NA>
+    Name: b, dtype: boolean
+    >>> to_float.fit_transform(s)
+    0    1.0
+    1    NaN
+    Name: b, dtype: float32
+    >>> s = pd.Series([True, None], name='b')
+    >>> s
+    0    True
+    1    None
+    Name: b, dtype: object
+    >>> to_float.fit_transform(s)
+    0    1.0
+    1    NaN
+    Name: b, dtype: float32
+
+    float64 columns are converted to float32:
+
+    >>> s = pd.Series([1.1, 2.2])
+    >>> s
+    0    1.1
+    1    2.2
+    dtype: float64
+    >>> to_float.fit_transform(s)
+    0    1.1
+    1    2.2
+    dtype: float32
+
+    Float64Dtype and Float32Dtype are cast to ``np.float32``. We do this because
+    most scikit-learn estimators cannot handle ``pd.Float32Dtype`` correctly
+    yet, especially in the presence of missing values (represented by ``pd.NA``
+    in such columns).
+
+    >>> s = pd.Series([1.1, 2.2, None], dtype='Float32')
+    >>> s
+    0     1.1
+    1     2.2
+    2    <NA>
+    dtype: Float32
+    >>> to_float.fit_transform(s)
+    0    1.1
+    1    2.2
+    2    NaN
+    dtype: float32
+
+    Notice that ``pd.NA`` has been replaced by ``np.nan``.
+
+    Columns that cannot be cast to numbers are rejected:
+
+    >>> s = pd.Series(['1.1', '2.2', 'hello'], name='x')
+    >>> to_float.fit_transform(s)
+    Traceback (most recent call last):
+        ...
+    skrub.core.RejectColumn: Could not convert column 'x' to numbers.
+
+    Once a column has been accepted, all calls to ``transform`` will result in
+    the same output dtype. Values that fail to be converted become null values.
+
+    >>> to_float = ToFloat().fit(pd.Series([1, 2]))
+    >>> to_float.transform(pd.Series(['3.3', 'hello']))
+    0    3.3
+    1    NaN
+    dtype: float32
+
+    Categorical and datetime columns are always rejected:
+
+    >>> s = pd.Series(['1.1', '2.2'], dtype='category', name='s')
+    >>> s
+    0    1.1
+    1    2.2
+    Name: s, dtype: category
+    Categories (2, ...): ['1.1', '2.2']
+    >>> to_float.fit_transform(s)
+    Traceback (most recent call last):
+        ...
+    skrub.core.RejectColumn: Refusing to cast column 's' with dtype 'category' to numbers.
+    >>> to_float.fit_transform(pd.to_datetime(pd.Series(['2024-05-13'], name='s')))
+    Traceback (most recent call last):
+        ...
+    skrub.core.RejectColumn: Refusing to cast column 's' with dtype 'datetime64[...]' to numbers.
+
+    float32 columns are passed through:
+
+    >>> s = pd.Series([1.1, None], dtype='float32')
+    >>> to_float.fit_transform(s) is s
+    True
+
+    If ``parentheses=True``, negative numbers represented using parentheses are converted
+
+    >>> s = pd.Series(["-1,234.56", "1,234.56", "(1,234.56)"], name='parens')
+    >>> ToFloat(decimal=".", thousand=",", parentheses=True).fit_transform(s)
+    0   -1234.5...
+    1    1234.5...
+    2   -1234.5...
+    dtype: float32
+
+    Numbers that use scientific notation are converted:
+
+    >>> s = pd.Series(["1.23e+4", "1.23E+4"], name="x")
+    >>> ToFloat(decimal=".").fit_transform(s)
+    0    12300.0
+    1    12300.0
+    Name: x, dtype: float32
+
+    It is possible to specify the thousands separator, e.g., to use ``" "``
+
+    >>> s = pd.Series(["4 567,89", "12 567,89"], name="x")
+    >>> ToFloat(decimal=",", thousand=" ").fit_transform(s)
+    0    4567.8...
+    1    12567.8...
+    Name: x, dtype: float32
+
+    This transformer does not do any advanced processing: it just replaces thousands
+    with ``''`` (the empty string) and replaces the decimal separator with ``'.'``,
+    then tries to parse the result as a float.
+    Extra separators, mixed separators, or multiple grouping separators may lead to
+    unexpected or unwanted results:
+
+    >>> s = pd.Series(["1,,234", "1,2,3,4.0"], name="x")
+    >>> ToFloat(decimal=".", thousand=",").fit_transform(s)
+    0    1234.0
+    1    1234.0
+    Name: x, dtype: float32
+
+    """  # noqa: E501
+
+    def __init__(self, decimal=".", thousand=None, parentheses=False):
+        self.decimal = decimal
+        self.thousand = thousand
+        self.parentheses = parentheses
+
+    def fit_transform(self, column, y=None):
+        """Fit the encoder and transform a column.
+
+        Parameters
+        ----------
+        column : pandas or polars Series
+            The input to transform.
+
+        y : None
+            Ignored.
+
+        Returns
+        -------
+        transformed : pandas or polars Series
+            The input transformed to Float32.
+        """
+        del y
+        self._thousand = "" if self.thousand is None else self.thousand
+        self.all_outputs_ = [sbd.name(column)]
+        if self.decimal is None:
+            raise ValueError("The decimal separator cannot be None.")
+        if self._thousand == self.decimal:
+            raise ValueError("The thousand and decimal separators must differ.")
+
+        if sbd.is_any_date(column) or sbd.is_categorical(column):
+            raise RejectColumn(
+                f"Refusing to cast column {sbd.name(column)!r} "
+                f"with dtype '{sbd.dtype(column)}' to numbers."
+            )
+        try:
+            self._needs_str_replace = False
+            # Default case it's directly converted to float32.
+            # Regex validation and string replacement is skipped.
+            # Optimization: allows us to avoid manipulation for
+            # formats that Python can parse natively.
+            if (
+                self.decimal != "." or self._thousand != "" or self.parentheses
+            ) and sbd.is_string(column):
+                self._needs_str_replace = True
+                column = _str_replace(
+                    column,
+                    decimal=self.decimal,
+                    thousand=self._thousand,
+                    parentheses=self.parentheses,
+                )
+            numeric = sbd.to_float32(column, strict=True)
+            return numeric
+        except Exception as e:
+            raise RejectColumn(
+                f"Could not convert column {sbd.name(column)!r} to numbers."
+            ) from e
+
+    def transform(self, column):
+        """Transform a column.
+
+        Parameters
+        ----------
+        column : pandas or polars Series
+            The input to transform.
+
+        Returns
+        -------
+        transformed : pandas or polars Series
+            The input transformed to Float32.
+        """
+        if self._needs_str_replace:
+            column = _str_replace(
+                column,
+                decimal=self.decimal,
+                thousand=self._thousand,
+                parentheses=self.parentheses,
+            )
+        return sbd.to_float32(column, strict=False)

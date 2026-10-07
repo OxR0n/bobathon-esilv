@@ -1,0 +1,256 @@
+from sklearn.base import TransformerMixin, check_is_fitted
+
+from . import selectors as s
+from ._base import SkrubBaseEstimator
+from ._single_column_transformer import SingleColumnTransformer
+
+
+class SelectCols(TransformerMixin, SkrubBaseEstimator):
+    """Select a subset of a DataFrame's columns.
+
+    A ``ValueError`` is raised if any of the provided column names are not in the
+    dataframe.
+
+    Accepts :obj:`pandas.DataFrame` and :obj:`polars.DataFrame` inputs.
+
+    Parameters
+    ----------
+    cols : list of str, str or :ref:`selector<selectors_ref>`
+        The columns to select, or a selector. A single column name can be passed as a
+        ``str``: ``"col_name"`` is the same as ``["col_name"]``. See the
+        :ref:`selectors<user_guide_selectors>` user guide for more info on selectors.
+
+    See Also
+    --------
+    DropCols : Dropping cols by name, dtypes, or general skrub selectors.
+    Cleaner: Can be used to drop columns with too many NaNs.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> from skrub import SelectCols
+    >>> df = pd.DataFrame({"A": [1, 2], "B": [10, 20], "C": ["x", "y"]})
+    >>> df
+       A   B  C
+    0  1  10  x
+    1  2  20  y
+    >>> SelectCols(["C", "A"]).fit_transform(df)
+       C  A
+    0  x  1
+    1  y  2
+    >>> SelectCols(["X", "A"]).fit_transform(df)
+    Traceback (most recent call last):
+        ...
+    ValueError: The following columns are requested for selection but missing from dataframe: ['X']
+    """  # noqa: E501
+
+    def __init__(self, cols):
+        self.cols = cols
+
+    def fit(self, X, y=None):
+        """Fit the transformer.
+
+        Parameters
+        ----------
+        X : DataFrame or None
+            If `X` is a DataFrame, the transformer checks that all the column
+            names provided in ``self.cols`` can be found in `X`.
+
+        y : None
+            Unused.
+
+        Returns
+        -------
+        SelectCols
+            The transformer itself.
+        """
+        self.columns_ = s.make_selector(self.cols).expand(X)
+        return self
+
+    def transform(self, X):
+        """Transform a dataframe by selecting columns.
+
+        Parameters
+        ----------
+        X : DataFrame
+            The DataFrame on which to apply the selection.
+
+        Returns
+        -------
+        DataFrame
+            The input DataFrame ``X`` after selecting only the columns listed
+            in ``self.cols`` (in the provided order).
+        """
+        return s.select(X, self.columns_)
+
+    def get_feature_names_out(self, input_features=None):
+        """Get output feature names for transformation.
+
+        Parameters
+        ----------
+        input_features : array-like of str or None, default=None
+            Ignored.
+
+        Returns
+        -------
+        feature_names_out : ndarray of str objects
+            Transformed feature names.
+        """
+        check_is_fitted(self, "columns_")
+        return self.columns_
+
+
+class DropCols(TransformerMixin, SkrubBaseEstimator):
+    """Drop a subset of a DataFrame's columns.
+
+    The other columns are kept in their original order. A ``ValueError`` is raised if
+    any of the provided column names are not in the dataframe.
+
+    Accepts :obj:`pandas.DataFrame` and :obj:`polars.DataFrame` inputs.
+
+    Parameters
+    ----------
+    cols : list of str, str or :ref:`selector <selectors_ref>`
+        The columns to drop, or a selector. A single column name can be passed as a
+        ``str``: ``"col_name"`` is the same as ``["col_name"]``. See the
+        :ref:`selectors <user_guide_selectors>` user guide for more info on selectors.
+
+    See Also
+    --------
+    SelectCols : Selecting cols by name, dtypes, or general skrub selectors.
+    Cleaner: Can be used to drop columns with too many nulls (or NaNs).
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> from skrub import DropCols
+    >>> df = pd.DataFrame({"A": [1, 2], "B": [10, 20], "C": ["x", "y"]})
+    >>> df
+       A   B  C
+    0  1  10  x
+    1  2  20  y
+    >>> DropCols(["A", "C"]).fit_transform(df)
+        B
+    0  10
+    1  20
+    >>> DropCols(["X"]).fit_transform(df)
+    Traceback (most recent call last):
+        ...
+    ValueError: The following columns are requested for selection but missing from dataframe: ['X']
+    """  # noqa: E501
+
+    def __init__(self, cols):
+        self.cols = cols
+
+    def fit(self, X, y=None):
+        """Fit the transformer.
+
+        Parameters
+        ----------
+        X : DataFrame or None
+            If `X` is a DataFrame, the transformer checks that all the column
+            names provided in ``self.cols`` can be found in `X`.
+
+        y : None
+            Unused.
+
+        Returns
+        -------
+        DropCols
+            The transformer itself.
+        """
+        selector = s.make_selector(self.cols)
+        self.kept_cols_ = (~selector).expand(X)
+        self.dropped_cols_ = selector.expand(X)
+        return self
+
+    def transform(self, X):
+        """Transform a dataframe by dropping columns.
+
+        Parameters
+        ----------
+        X : DataFrame
+            The DataFrame on which to apply the selection.
+
+        Returns
+        -------
+        DataFrame
+            The input DataFrame ``X`` after dropping the columns listed in
+            ``self.cols``.
+        """
+        return s.select(X, s.make_selector(self.kept_cols_))
+
+    def get_feature_names_out(self, input_features=None):
+        """Get output feature names for transformation.
+
+        Parameters
+        ----------
+        input_features : array-like of str or None, default=None
+            Ignored.
+
+        Returns
+        -------
+        feature_names_out : ndarray of str objects
+            Transformed feature names.
+        """
+        check_is_fitted(self, "kept_cols_")
+        return self.kept_cols_
+
+
+class Drop(SingleColumnTransformer):
+    """Drop the selected DataFrame's column unconditionally.
+
+    The other columns are kept in their original order. A ``ValueError`` is raised if
+    any of the provided column names are not in the dataframe.
+    This transformer is different from :class:`DropCols` in that it is designed
+    to be used with other transformers, for example to remove all columns with a
+    given type from a transformation.
+
+
+    Parameters
+    ----------
+    cols : list of str, str or :ref:`selector <selectors_ref>`
+        The columns to drop, or a selector. A single column name can be passed as a
+        ``str``: ``"col_name"`` is the same as ``["col_name"]``. See the
+        :ref:`selectors <user_guide_selectors>` user guide for more info on selectors.
+
+    See Also
+    --------
+    DropCols : drop columns by name, or skrub selectors.
+    ApplyToCols: Can be used to Apply a transformer to selected columns in a dataframe.
+    TableVectorizer: Transform a dataframe to a numeric (vectorized) representation.
+
+    Examples
+    --------
+    ``Drop`` is meant to be used with other transformers to drop columns with a
+    given type or other property.
+
+    For example, if we want to vectorize a dataframe but drop the numeric columns,
+    we can do:
+
+    >>> import pandas as pd
+    >>> from skrub import Drop
+    >>> df = pd.DataFrame({"num": [1,2,3], "text": ["hello", "world", "foo"]})
+    >>> df
+       num  text
+    0    1  hello
+    1    2  world
+    2    3    foo
+    >>> from skrub import TableVectorizer
+    >>> TableVectorizer(numeric=Drop()).fit_transform(df)
+        text_foo  text_hello  text_world
+    0       0.0         1.0         0.0
+    1       0.0         0.0         1.0
+    2       1.0         0.0         0.0
+
+    Here, only the "text" column is vectorized, and the "num" column is dropped
+    entirely.
+
+    """
+
+    def fit_transform(self, column, y=None):
+        self.all_outputs_ = []
+        return []
+
+    def transform(self, column):
+        return []
