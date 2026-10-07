@@ -48,7 +48,6 @@ FEATURE_COLS = [
     "time_since_intake_on",
     "time_since_intake_off",
     "on",
-    "off",
 ]
 
 
@@ -114,9 +113,12 @@ def main():
     num_cols = FEATURE_COLS + ["time_since_diagnosis", "visit_number"]
     X_num_train, X_num_test = visits[num_cols], X_test[num_cols]
 
-    full_drop = ["Index", "patient_id", "target"]
-    X_full_train = visits.drop(columns=full_drop)
-    X_full_test = X_test.drop(columns=["Index", "patient_id"])
+    # Explicit column selection instead of drop(): the raw data no longer has
+    # an "off" column, and drop() on a missing column breaks lazy re-execution
+    # in the skrub DataOps graph (step 5).
+    all_feature_cols = [c for c in X_test.columns if c not in ("Index", "patient_id")]
+    X_full_train = visits[all_feature_cols]
+    X_full_test = X_test[all_feature_cols]
 
     # Same frames with string columns as pandas "category" dtype, so that
     # HistGradientBoostingRegressor (categorical_features="from_dtype") can use
