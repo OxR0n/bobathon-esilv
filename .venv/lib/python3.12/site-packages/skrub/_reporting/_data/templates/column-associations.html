@@ -1,0 +1,88 @@
+<article class="margin-t-s flex-reverse flex-end wrapper gap-l">
+    {% if summary["associations_skipped"] %}
+
+    <div id="skipped-associations-alert" class="alert-info-dismissable flex space-between">
+        <div class="alert-content shrinkable-text">
+            <p>Computing pairwise associations was skipped. This is due to either:</p>
+            <ul>
+                <li>The dataframe exceeding the configured
+                    <code>table_report_associations_threshold</code>
+                    limit (default: 30).
+                </li>
+                <li>The <code>compute_associations</code> option being set to <code>False</code> (default: <code>"auto"</code>, which applies the configured <code>table_report_associations_threshold</code>).</li>
+            </ul>
+
+            <p>You can adjust this behavior in several ways:</p>
+            <ul>
+                <li>To force computation for a single report:
+                    <pre><code class="language-python">    report = TableReport(df, compute_associations=True)</code></pre>
+                </li>
+                <li>To change the threshold for the current Python session, use <code>skrub.set_config</code>:
+                    <pre><code class="language-python">    from skrub import set_config
+    set_config(table_report_associations_threshold=50)</code></pre>
+                </li>
+                <li>To make the change permanent, use an environment variable:
+                    <pre><code class="language-shell">    export SKB_TABLE_REPORT_ASSOCIATIONS_THRESHOLD=50</code></pre>
+                </li>
+            </ul>
+        </div>
+    </div>
+
+    {% elif summary.get("associations_skipped_polars_no_pyarrow", False) %}
+
+    <div id="skipped-associations-polars-pyarrow-alert" class="alert-info-dismissable flex space-between">
+        <div class="alert-content shrinkable-text">
+            Computing pairwise associations is not available for Polars dataframes when PyArrow is not installed.
+            To enable associations, install PyArrow: <code>pip install pyarrow</code>, or use a Pandas dataframe.
+        </div>
+    </div>
+
+    {% elif summary["top_associations"] %}
+
+    <div class="horizontal-scroll vertical-scroll-table-wrapper">
+    <table class="pure-table pure-table-bordered sticky-header-table">
+        <thead>
+            <tr>
+                <th scope="col">Column 1</th>
+                <th scope="col">Column 2</th>
+                <th scope="col"><a href="https://en.wikipedia.org/wiki/Cram%C3%A9r%27s_V">Cramér's V</a></th>
+                <th scope="col"><a href="https://en.wikipedia.org/wiki/Pearson_correlation_coefficient">Pearson's Correlation</a></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for association in summary["top_associations"] %}
+            <tr>
+                <td class="elided">{{ association["left_column_name"] }}</td>
+                <td class="elided">{{ association["right_column_name"] }}</td>
+                <td
+                    {% if association["cramer_v"] is gt high_association_threshold %}
+                    class="critical"
+                    {%- endif -%}
+                    >
+                    {{ association["cramer_v"] | format_number }}
+                </td>
+                <td>
+                    {%- if not (association["pearson_corr"] | is_null) -%}
+                    {{ association["pearson_corr"] | format_number }}
+                    {%- endif -%}
+                </td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
+
+    <div class="text shrinkable-text">
+        The table below shows the strength of association between the most similar columns in the dataframe.
+        <a href="https://en.wikipedia.org/wiki/Cram%C3%A9r%27s_V">Cramér's V</a> statistic is a number between 0 and 1.
+        When it is close to 1 the columns are strongly associated — they contain similar information.
+        In this case, one of them may be redundant and for some models (such as linear models) it might be beneficial to remove it.
+    </div>
+
+    {% elif summary['n_columns'] == 1 %}
+    No associations were computed because the dataframe has only one column.
+    {% else %}
+    No strong associations between any pair of columns were identified by a quick screening of a subsample of the dataframe.
+    {% endif %}
+
+</article>

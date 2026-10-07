@@ -1,0 +1,67 @@
+{% import "buttons.html" as buttons %}
+
+<article class="wrapper margin-t-s flow" data-show-on="NON_EMPTY_COLUMN_FILTER_SELECTED"
+    data-hide-on="EMPTY_COLUMN_FILTER_SELECTED" >
+    <div class="flex flex-wrap">
+        <div class="box">
+            <pre id="selected-columns-display" data-manager="SelectedColumnsDisplay"></pre>
+            {{ buttons.copybutton("selected-columns-display") }}
+        </div>
+	<div class="flex flex-wrap toggletip-wrapper column-selection-buttons">
+	    <div class="toggletip" data-manager="Toggletip">
+		<button type="button"><span>i</span></button>
+		<div class="toggletip-info box-shadow">
+		    To construct a list of column names that you can easily copy-paste
+		    (in the box), select some columns using the checkboxes next
+		    to the column names or the "Select all" button.
+		</div>
+	    </div>
+	    <button type="button" data-test="select-all-columns" data-manager="SelectAllVisibleColumns">Select all</button>
+	    <button type="button" data-test="deselect-all-columns" data-manager="DeselectAllColumns">Deselect all</button>
+	</div>
+    </div>
+    {% if summary.plots_skipped %}
+    <div id="skipped-plot-alert" class="alert-info-dismissable flex space-between"
+        data-manager="AlertDismissable">
+        <div class="alert-content shrinkable-text">
+
+            <p>Plotting was skipped. This is due to either:</p>
+            <ul>
+                <li>The dataframe exceeding the configured
+                    <code>table_report_plots_threshold</code>
+                    limit (default: 30).
+                </li>
+                <li>The <code>plot_distributions</code> option being set to <code>False</code> (default: <code>"auto"</code>, which applies the configured <code>table_report_plots_threshold</code>).</li>
+            </ul>
+
+            <p>You can adjust this behavior in several ways:</p>
+            <ul>
+                <li>To force plotting for a single report:
+                    <pre><code class="language-python">    report = TableReport(df, plot_distributions=True)</code></pre>
+                </li>
+                <li>To change the threshold for the current Python session, use <code>skrub.set_config</code>:
+                    <pre><code class="language-python">    from skrub import set_config
+    set_config(table_report_plots_threshold=50)</code></pre>
+                </li>
+                <li>To make the change permanent, use an environment variable:
+                    <pre><code class="language-shell">    export SKB_TABLE_REPORT_PLOTS_THRESHOLD=50</code></pre>
+                </li>
+            </ul>
+        </div>
+        <div class="dismiss-container">
+            {{ buttons.dismissbutton() }}
+        </div>
+    </div>
+    {% else %}
+    <div class="horizontal-scroll padding-b-s">
+	<div class="column-summary-group">
+	    {% for column in summary.columns %}
+	    {% set col_id="col_{}".format(column["idx"]) %}
+	    {% include "column-summary.html" %}
+	    {% endfor %}
+	</div>
+    </div>
+    {% endif %}
+</article>
+
+{% include "no-filter-matches.html" %}
