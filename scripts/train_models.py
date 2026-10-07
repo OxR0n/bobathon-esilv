@@ -184,9 +184,12 @@ def main():
             grp = data["patient_id"]
             # NOTE: pass the column list, not a bare string (skrub 0.11 forwards it
             # to DataFrame.drop, which treats a str as labels of the *index*).
-            X_op = data.drop(
-                ["Index", "patient_id", "target"], axis=1
-            ).skb.mark_as_X(
+            # Drop only "Index"/"patient_id": X_test has no "target", and skrub's
+            # lazy graph re-executes this node at predict time, so dropping
+            # "target" eagerly would crash on test. Instead we select the feature
+            # columns explicitly - they exist in both train and test frames.
+            feat_cols = [c for c in visits.columns if c not in ("Index", "patient_id", "target")]
+            X_op = data[feat_cols].skb.mark_as_X(
                 cv=GroupKFold(n_splits=N_SPLITS),
                 split_kwargs={"groups": grp},
             )
